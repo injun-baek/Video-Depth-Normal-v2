@@ -1,0 +1,213 @@
+experiment:
+  name: "V2.1 rope mean L1"  # if training.resume set as true, name is ignored
+
+# Weights & Biases Configuration
+wandb:
+  project: "DepthEstimation-v2"
+  entity: null
+  tags: []
+
+visualization:
+  enabled: true                    
+  save_interval: 1                 
+  train_sample_indices: [1, 10, 15, 50, 123, 999, 1500, 2000, 15000]
+  val_sample_indices: [1, 10, 15, 50, 123, 999, 1500, 2000, 15000]
+  save_dir: "./visualizations"     
+  save_initial: true               
+  save_final: true                 
+
+# Usage Note
+# ddp: NCCL_P2P_LEVEL=LOC OMP_NUM_THREADS=4 torchrun --nproc_per_node=2 scripts/train_ddp.py  # NCCL_TIMEOUT=1800 NCCL_BLOCKING_WAIT=1  not working
+# dp: NCCL_P2P_LEVEL=LOC python scripts/train.py
+# single: python scripts/train_ddp.py
+environment:
+  seed: 42
+  enable_multi_gpu: false
+  multi_gpu_mode: 'dp' # 'dp' or 'ddp' if multi gpu is false, then this will be ignored
+  device: "cuda:3"
+
+# Model Configuration
+model:
+  version: "v2"  # v1 -> dino / v2 -> hiera
+  encoder_model: "hiera_large_224" # select from below
+    # v1: [dinov2_vits14, dinov2_vitb14, dinov2_vitl14, dinov2_vitg14]
+    # v2: [hiera_tiny_224, hiera_small_224, hiera_base_224, hiera_base_plus_224, hiera_large_224, hiera_huge_224]
+    # NOT supported yet: [hiera_base_16x224, hiera_base_plus_16x224, hiera_large_16x224, hiera_huge_16x224]
+  encoder_finetune: false
+  
+  head_finetune: true
+  attention_feature_levels: [2, 3]
+
+  prediction_mode: "depth"  # ["depth", "residual"]
+
+  # below are needed in only v1
+  vit_model_size: "small"
+  temporal_head:  "VideoDepthAnythingHead" # or "VideoDepthAnythingHeadSDXL", "VideoDepthAnythingHeadSDv1", "VideoDepthAnythingHead"
+
+# Pretrained Weights
+pretrained_weights:
+  vit_small: "https://huggingface.co/depth-anything/Video-Depth-Anything-Small/resolve/main/video_depth_anything_vits.pth"
+  vit_large: "https://huggingface.co/depth-anything/Video-Depth-Anything-Large/resolve/main/video_depth_anything_vitl.pth"
+
+# Loss Configuration  
+loss_weights:
+  depth_ssim: 0.0
+  depth_l1: 0.0
+  affine_invariant: 1.0
+  normal_l1: 0.0 # 0.1
+  tgm_loss: 0.0 # 2.0
+
+# Training Configuration
+training:
+  resume: false
+  resume_checkpoint: "checkpoints/E228_best_model.pth"
+  batch_size: 16
+  learning_rate: !!float 1e-4
+  num_epochs: 100
+  save_model_interval: 10
+  eval_interval: 1
+  sampler_enabled: true
+
+  difficulty_enable: false
+  difficulty:
+    difficulty_basis: "tgm_loss"
+    difficulty_threshold: 0.5
+
+datasets:
+  sintel:
+    enabled: false
+    class_name: "SintelDataset"
+    train_split: 0.9
+    params:
+      root_dir: "/mnt/sintel/"
+      data_types: ['rgb', 'depth', 'depth_anything_v2']
+
+  scannetpp:  # not emplemented yet
+    enabled: false
+    class_name: "ScanNetPPDataset"
+    train_split: 0.9
+    params:
+      root_dir: "/mnt/scannetpp/dataset/data"
+      data_types: ['rgb', 'depth']
+      exclude_scenes: ['01ce24e652', '2ebbca3e57', 'db5293a870', 'bb0ad8a081', '70f0e494b2', '755c495a31', '1117299565', '09a6767fc2', 'ba8e2bce5d', '3549335582', '9816c49e97', 'f2e6c43543', '20ff72df6e', '4291be3b44', 'be05b26a38', '73f9370962', '6126572846', 'f19ca0a52e', '934599022f', '58d446b708', '43cd995c51', 'cec8312f4e', '114e349224', 'f1efd25854', '617dc40bca', '3b753d9ae8', 'deb1867829', 'c285c82ade', 'e945643bef', '64b8886d68', '3e9a598891', 'ba89245cfd', '85dc2702b7', '0dce89ab21', '7543973e1a', 'bcbc6e1d2d', 'abf29d2474', 'dc204f59ae', '25bae29ab3', 'd1345a65c1', 'faba6e97d7', '9ee1527aa6', '5d902f1593', 'a30646cae6', 'e5a769dbf5', '9ad3639fbe', 'a8f7f66985', '4aef651da7', '06bc6d1b24', 'dbd2a5961f', '64672b5bf5', '0e28968c1f', '9ef5fc6271', '7b898d2d22', 'bace6b6013', '8a87c2ed7d', '909a9ea5fc', 'fc85fb414c', '77b40ce601', 'd3a22366f4', '0e900bcc5c', '95c9a0f535', 'd290096f64', '7d75c00a32', 'e87f1ebcac', '9610a81463', '53bd1b3b05', '523657b4d0', 'b6d73041c8', '442b144761', 'ce12db9e81', '82bf847c8b', '589f5c7c58', 'cab239278a', '7d8d37ca38', '3aa115e55e', 'fe5fe0a8a4', '9d8fcc4215', 'a5859cfd40', '3597f00367', 'defd3457db', '6248c6742d', '2748de13fb', '70945f435a', 'd7fc87324e', 'd918af9c5f', '35050f41c5', 'e6671918c8', '2b5ef64cad', '7b6477cb95', 'c50d2d1d42', 'cc5237fd77', 'acd95847c5', 'fb5a96b1a2', 'a24f64f7fb', '1ada7a0617', '5eb31827b7', '3e8bba0176', '3f15a9266d', '21d970d8de', '5748ce6f01', 'c4c04e6d6c', '7831862f02', 'bde1e479ad', '38d58a7a31', '5ee7c22ba0', 'f9f95681fd', '3864514494', '40aec5fffa', '13c3e046d7', 'e398684d27', 'a8bf42d646', '45b0dac5e3', '31a2c91c43', 'e7af285f7d', '286b55a2bf', '7bc286c1b6', 'f3685d06a9', 'b0a08200c9', '825d228aec', 'a980334473', 'f2dc06b1d2', '5942004064', '25f3b7a318', 'bcd2436daf', 'f3d64c30f8', '0d2ee665be', '3db0a1c8f3', 'ac48a9b736', 'c5439f4607', '578511c8a9', 'd755b3d9d8', '99fa5c25e1', '09c1414f1b', '5f99900f09', '9071e139d9', '6115eddb86', '27dd4da69e', 'c49a8c6cff']
+      # 다운로드 문제
+
+  vkitti:
+    enabled: true
+    class_name: "VKittiDataset"
+    train_split: 0.9
+    params:
+      root_dir: "/mnt/vkitti/"
+      data_types: ['rgb', 'depth', 'depth_anything_v2']
+      cameras: ['Camera_0']
+
+  tartanair:
+    enabled: true
+    class_name: "TartanAirDataset"
+    train_split: 0.95
+    params:
+      root_dir: "/mnt/tartanair/dataset/"
+    envs:
+      - 'AbandonedCable'
+      - 'Apocalyptic'
+      - 'CountryHouse'
+      - 'ForestEnv'
+      - 'IndustrialHangar'
+      - 'NordicHarbor'
+      - 'OldTownNight'
+      - 'Ruins'
+      - 'ShoreCaves'
+      - 'WaterMillNight'
+      - 'AbandonedFactory'
+      - 'ArchVizTinyHouseDay'
+      - 'Cyberpunk'
+      - 'Gascola'
+      - 'JapaneseAlley'
+      - 'Ocean'
+      - 'OldTownSummer'
+      - 'SeasideTown'
+      - 'Slaughter'
+      - 'WesternDesertTown'
+      - 'AbandonedFactory2'
+      - 'ArchVizTinyHouseNight'
+      - 'CyberPunkDowntown'
+      - 'GothicIsland'
+      - 'JapaneseCity'
+      - 'Office'
+      - 'OldTownWinter'
+      - 'SeasonalForestAutumn'
+      - 'SoulCity'
+      - 'AbandonedSchool'
+      - 'BrushifyMoon'
+      - 'DesertGasStation'
+      - 'GreatMarsh'
+      - 'MiddleEast'
+      - 'OldBrickHouseDay'
+      - 'PolarSciFi'
+      - 'SeasonalForestSpring'
+      - 'Supermarket'
+      - 'AmericanDiner'
+      - 'CarWelding'
+      - 'Downtown'
+      - 'HongKong'
+      - 'ModernCityDowntown'
+      - 'OldBrickHouseNight'
+      - 'Prison'
+      - 'SeasonalForestSummerNight'
+      - 'TerrainBlending'
+      - 'AmusementPark'
+      - 'CastleFortress'
+      - 'EndofTheWorld'
+      - 'Hospital'
+      - 'ModularNeighborhood'
+      - 'OldIndustrialCity'
+      - 'Restaurant'
+      - 'SeasonalForestWinter'
+      - 'UrbanConstruction'
+      - 'AncientTowns'
+      - 'CoalMine'
+      - 'FactoryWeather'
+      - 'House'
+      - 'ModularNeighborhoodIntExt'
+      - 'OldScandinavia'
+      - 'RetroOffice'
+      - 'SeasonalForestWinterNight'
+      - 'VictorianStreet'
+      - 'Antiquity3D'
+      - 'ConstructionSite'
+      - 'Fantasy'
+      - 'HQWesternSaloon'
+      - 'ModUrbanCity'
+      - 'OldTownFall'
+      - 'Rome'
+      - 'Sewerage'
+      - 'WaterMillDay'
+    difficulties: ['easy', 'hard']
+    cameras: ['lcam_front']
+    data_types: ['rgb', 'depth', 'depth_anything_v2']
+
+  point_odyssey:
+    enabled: true
+    class_name: "PointOdysseyDataset"
+    train_split: 0.9
+    params:
+      root_dir: "/mnt/point-odyssey/"
+      data_types: ['rgb', 'depth', 'depth_anything_v2']
+      exclude_scenes: ['character']  # rgb, depth 시퀀스 불일치
+
+dataset_common:
+  sequence_length: 8
+  sequence_stride: 8
+  output_size: [224, 224] # H, W  # 384 384
+  use_random_crop: false  # not tested
+  num_workers: 2
+  train_val_shuffle: true
+  min_depth: !!float 1e-3
+  max_depth: 70
+
+# Logging and Environment
+logging:
+  log_dir: "./logs"
+  tensorboard_dir: "./runs"
+  checkpoint_dir: "./checkpoints"
+  monitor: "val_loss"

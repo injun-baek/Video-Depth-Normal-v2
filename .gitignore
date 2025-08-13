@@ -1,0 +1,8 @@
+*.pyc
+*.pth
+*.so
+visualizations/*
+wandb/*
+experiment_tracking.json
+output/*
+cache/*
