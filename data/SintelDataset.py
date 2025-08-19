@@ -135,7 +135,7 @@ class SintelDataset(Dataset):
                 elif data_type == 'mask':
                     files = sorted(glob.glob(os.path.join(data_path, '*.dpt')))
                 elif data_type == 'depth_anything_v2':
-                    files = sorted(glob.glob(os.path.join(data_path, '*.npy')))
+                    files = sorted(glob.glob(os.path.join(data_path, '*.png')))
                 else:
                     files = sorted(glob.glob(os.path.join(data_path, '*.png')))
                 
@@ -236,7 +236,8 @@ class SintelDataset(Dataset):
             img_np = self.read_dpt_file(frame_path)
             img_np = img_np.astype(np.float32)
         elif data_type == 'depth_anything_v2':
-            img_np = np.load(frame_path)
+            img = Image.open(frame_path)
+            img_np = np.array(img, dtype=np.uint16)
             img_np = img_np.astype(np.float32)
         elif data_type == 'mask':
             img_np = self.read_dpt_file(frame_path)
