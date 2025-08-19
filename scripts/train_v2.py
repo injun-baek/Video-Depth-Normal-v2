@@ -14,6 +14,8 @@ from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 # This allows us to import modules from sibling directories like 'data', 'loss', etc.
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+from video_depth_anything.video_depth import VideoDepthAnything
+from models.video_depth_model_v2 import VideoDepthAnything as TrainingModel
 from models.video_depth_model import VideoDepthEstimationModel
 from loss.loss import VideoDepthLoss, VideoNormalLoss, compute_scale_and_shift
 from utils.normal_utils import normal_vector
@@ -264,7 +266,8 @@ def create_sample_visualizations(model, dataset, device, sample_indices, video_d
         # gt_normals = normal_vector(gt_depth)
         gt_depth = gt_depth.squeeze(2)
 
-        pred_depth, pred_normal = model(input_depth, rgb_input)
+        #pred_depth, pred_normal = model(input_depth, rgb_input)
+        pred_depth = model(input_depth)
 
         pred_depth = (pred_depth - pred_depth.min()) / torch.clamp(pred_depth.max() - pred_depth.min(), min=1e-8)
         pred_depth = pred_depth.clamp(0.0, 1.0)
@@ -306,11 +309,13 @@ def validate(model, val_loader, depth_criterion, normal_criterion, device):
         gt_normals = normal_vector(gt_depths) # .unsqueeze(2)
         gt_depths = gt_depths.squeeze(2)
         
-        pred_depths, pred_normals = model(input_depths, rgbs)
+        #pred_depths, pred_normals = model(input_depths, rgbs)
+        pred_depths = model(input_depths)
         
         depth_loss_dict = depth_criterion(pred_depths, gt_depths, masks.squeeze(2))
-        normal_loss_dict = normal_criterion(pred_normals, gt_normals, masks.squeeze(2))
-        for key, value in (depth_loss_dict | normal_loss_dict).items():
+        # normal_loss_dict = normal_criterion(pred_normals, gt_normals, masks.squeeze(2))
+        #for key, value in (depth_loss_dict | normal_loss_dict).items():
+        for key, value in depth_loss_dict.items():
             if torch.is_tensor(value):
                 running_losses[key] += value.item()
         
@@ -351,18 +356,33 @@ def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
 
-    model = VideoDepthEstimationModel(
-        sequence_length=args.sequence_length,
-        attention_feature_levels=[2,3],  # args.attention_feature_levels,
-        encoder=args.encoder,
-        encoder_finetune=(not args.freeze_encoder),
-        use_residual=args.use_residual,
-        use_final_relu=args.use_final_relu,
-        use_depth_feature=args.use_depth_feature,
-        use_rgb_feature=args.use_rgb_feature
-    )
+    model_configs = {
+        'vits': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]},
+        'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]},
+    }
 
-    model.to(device)
+    # vda_model = VideoDepthAnything(**model_configs[args.encoder])
+    # vda_model.load_state_dict(torch.load(f'./checkpoints/video_depth_anything_{args.encoder}.pth', map_location='cpu'), strict=True)
+    # vda_model = vda_model.to(device)
+
+    model = TrainingModel(
+        **model_configs[args.encoder],
+        use_residual=args.use_residual,
+        input_normal=args.input_normal
+    )
+    if args.from_my_trained:
+        model.load_state_dict(torch.load(args.from_my_trained, map_location='cpu'), strict=False)
+    else:        
+        model.load_state_dict(torch.load(f'./checkpoints/video_depth_anything_{args.encoder}.pth', map_location='cpu'), strict=False)
+    model = model.to(device)
+    
+    for param in model.parameters():
+        param.requires_grad = False
+    for param in model.pretrained.parameters():
+        param.requires_grad = True
+    for param in model.final_res.parameters():
+        param.requires_grad = True
+
     # if parallel:
     #     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
     #     model = torch.nn.DataParallel(model, device_ids=cuda_nums)
@@ -374,8 +394,8 @@ def train(args):
     using_datasets = []
     if args.datasets.lower() == 'small':
         using_datasets = ["Sintel"]
-        train_viz_index = [0, 4, 5, 8]#, 10, 14, 15, 25, 29, 32, 50, 52, 64, 69, 72, 74, 77, 82, 85, 88, 113]
-        val_viz_index = [0, 1, 2]#, 3, 4, 5, 6, 7, 9, 10, 11, 12]
+        train_viz_index = [0]#, 4, 5, 8, 10, 14, 15, 25, 29, 32, 50, 52, 64, 69, 72, 74, 77, 82, 85, 88, 113]
+        val_viz_index = [0]#, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12]
     elif args.datasets.lower() == 'middle':
         using_datasets = ["PointOdyssey"]
         train_viz_index = [14, 30, 59, 142, 154, 198, 225, 305, 311, 328, 336, 430, 439, 470, 536, 542, 548, 568, 577, 607, 610, 613, 617, 628, 631, 635, 654, 661, 678, 742, 751, 760, 786, 894, 911, 925, 955, 993, 994] #, 1031, 1038, 1121, 1170, 1181, 1194, 1240, 1253, 1254, 1267, 1307, 1308, 1320, 1369, 1387, 1398]
@@ -439,14 +459,17 @@ def train(args):
             gt_depths = gt_depths.squeeze(2)
 
             optimizer.zero_grad()
-            pred_depths, pred_normals = model(input_depths, rgbs)
+            #pred_depths, pred_normals = model(input_depths, rgbs)
+            pred_depths = model(input_depths)
             depth_loss_dict = depth_criterion(pred_depths, gt_depths, masks.squeeze(2))
-            normal_loss_dict = normal_criterion(pred_normals, gt_normals, masks.squeeze(2))
-            total_loss = depth_loss_dict['total_loss'] + normal_loss_dict['normal_loss'] * args.normal_loss_scale
+            total_loss = depth_loss_dict['total_loss']
+            #normal_loss_dict = normal_criterion(pred_normals, gt_normals, masks.squeeze(2))
+            #total_loss = depth_loss_dict['total_loss'] + normal_loss_dict['normal_loss'] * args.normal_loss_scale
 
             total_loss.backward()
             
-            for key, value in (depth_loss_dict | normal_loss_dict).items():
+            #for key, value in (depth_loss_dict | normal_loss_dict).items():
+            for key, value in depth_loss_dict.items():
                 if torch.is_tensor(value):
                     train_running_loss_dict[key] += value.item()
             
@@ -490,23 +513,22 @@ def train(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Video Depth Anything Training')
 
-    parser.add_argument('--device', type=str, default='cuda:0', help='Device to use for training (e.g., cuda:0, cpu).')
-    parser.add_argument('--encoder', type=str, default='hiera_small_224', help='Encoder architecture to use.')
+    parser.add_argument('--device', type=str, default='cuda:2', help='Device to use for training (e.g., cuda:0, cpu).')
+    parser.add_argument('--encoder', type=str, default='vits', help='Encoder architecture to use.')
     parser.add_argument('--freeze_encoder', type=bool, default=False, help='Freeze the encoder weights during training.')
     
     parser.add_argument('--use_residual', type=bool, default=True, help='Use residual connections.')
-    parser.add_argument('--use_final_relu', type=bool, default=True, help='Use ReLU activation in the final layer.')
-    parser.add_argument('--use_depth_feature', type=bool, default=True, help='Use depth features.')
-    parser.add_argument('--use_rgb_feature', type=bool, default=True, help='Use RGB features.')
+    parser.add_argument('--input_normal', type=bool, default=True, help='Use input normal.')
+    parser.add_argument('--from_my_trained', type=str, default=None, help='from my trained model')
     
-    parser.add_argument('--datasets', type=str, default='small', choices=['small', 'middle', 'middle2', 'large'], help='Dataset to use for training.')
+    parser.add_argument('--datasets', type=str, default='large', choices=['small', 'middle', 'middle2', 'large'], help='Dataset to use for training.')
     parser.add_argument('--sequence_length', type=int, default=16, help='Length of the input video sequence.')
     parser.add_argument('--batch_size', type=int, default=6, help='Batch size for training.')
     parser.add_argument('--size', type=int, default=224, help='Input size for the model.')
     parser.add_argument('--num_workers', type=int, default=4, help='Number of workers for data loading.')
 
-    parser.add_argument('--initial_lr', type=float, default=1e-4, help='Initial learning rate.')
-    parser.add_argument('--final_lr', type=float, default=1e-7, help='Final learning rate.')
+    parser.add_argument('--initial_lr', type=float, default=1e-5, help='Initial learning rate.')
+    parser.add_argument('--final_lr', type=float, default=1e-8, help='Final learning rate.')
     parser.add_argument('--alpha', type=float, default=0.0, help='Alpha value for the gradient loss function.')
     parser.add_argument('--stable_scale', type=float, default=0.0, help='Scale for the temporal loss function.')
     parser.add_argument('--ssim_loss_scale', type=float, default=0.0, help='Scale for the SSIM loss function.')
@@ -518,7 +540,7 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint_dir', type=str, default='./trained_models', help='Directory to save checkpoints.')
     parser.add_argument('--save_interval', type=int, default=1, help='Save checkpoint every N epochs.')
 
-    parser.add_argument('--use_wandb', type=bool, default=False, help='Use Weights & Biases for logging.')
+    parser.add_argument('--use_wandb', type=bool, default=True, help='Use Weights & Biases for logging.')
     args = parser.parse_args()
 
     # todo smell

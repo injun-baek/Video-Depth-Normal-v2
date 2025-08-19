@@ -16,6 +16,7 @@ from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 # This allows us to import modules from sibling directories like 'data', 'loss', etc.
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+from models.video_depth_model_v2 import VideoDepthAnything
 from models.video_depth_model import VideoDepthEstimationModel
 
 
@@ -131,18 +132,17 @@ def evaluate(args):
 
     print(f"Using device: {device}")
 
-    model = VideoDepthEstimationModel(
-        sequence_length=16,  # args.sequence_length,
-        attention_feature_levels=[2,3],  # args.attention_feature_levels,
-        encoder=args.encoder,
-        encoder_finetune=False,
-        use_residual=args.use_residual,
-        use_final_relu=args.use_final_relu,
-        use_depth_feature=args.use_depth_feature,
-        use_rgb_feature=args.use_rgb_feature
+    model_configs = {
+        'vits': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]},
+        'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]},
+    }
+
+    model = VideoDepthAnything(
+        **model_configs[args.encoder],
+        use_residual=args.use_residual
     )
     model.load_state_dict(torch.load(args.checkpoint, map_location='cpu'))
-    model.to(device).eval()
+    model = model.to(device).eval()
 
     dataset_names = [args.eval_data]
     val_datasets = create_datasets(dataset_names, config_file_path=args.config, split='val', random_seed=RANDOM_SEED)
@@ -173,7 +173,8 @@ def evaluate(args):
         gt_depths = gt_depths.squeeze(2)
 
         infer_start_time = time.time()
-        pred_depths, pred_normals = model(input_depths, rgbs)
+        #pred_depths, pred_normals = model(input_depths, rgbs)
+        pred_depths = model(input_depths)
         infer_elapsed_time += time.time() - infer_start_time
 
         B, S = gt_depths.shape[0], gt_depths.shape[1]
@@ -216,20 +217,21 @@ def evaluate(args):
     
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Validate Video Depth Estimation Model')
-    parser.add_argument('--device', type=str, default='cuda:0', help='Device to use for validation (e.g., cuda:0, cpu).')
-    parser.add_argument('--encoder', type=str, default='hiera_small_224', help='Encoder architecture to use.')
+    parser.add_argument('--device', type=str, default='cuda:1', help='Device to use for validation (e.g., cuda:0, cpu).')
+    parser.add_argument('--encoder', type=str, default='vits', help='Encoder architecture to use.')
     
     parser.add_argument('--use_residual', type=bool, default=True, help='Use residual connections.')
+    parser.add_argument('--input_normal', type=bool, default=True, help='Use input normal.')
     parser.add_argument('--use_final_relu', type=bool, default=True, help='Use ReLU activation in the final layer.')
     parser.add_argument('--use_depth_feature', type=bool, default=True, help='Use depth features.')
     parser.add_argument('--use_rgb_feature', type=bool, default=True, help='Use RGB features.')
     
-    parser.add_argument('--checkpoint', type=str, default='trained_models/E099_video_depth_normal_epoch_9.pth', help='Path to validation checkpoint file')
+    parser.add_argument('--checkpoint', type=str, default='trained_models/E133_video_depth_normal_epoch_4.pth', help='Path to validation checkpoint file')
     parser.add_argument('--config', type=str, default='configs/config_eval.yaml', help='Path to validation configuration file')
     parser.add_argument('--num_workers', type=int, default=4, help='Number of workers for data loading')
     parser.add_argument('--batch_size', type=int, default=1, help='Batch size for data loading')
     parser.add_argument('--input_size', type=int, default=224, help='Input size for the model')  # todo sync with config
-    parser.add_argument('--eval_data', type=str, default='Sintel', choices=['Sintel', 'VKitti', 'PointOdyssey', 'TartanAir'], help='Evaluation dataset to use')
+    parser.add_argument('--eval_data', type=str, default='VKitti', choices=['Sintel', 'VKitti', 'PointOdyssey', 'TartanAir'], help='Evaluation dataset to use')
     parser.add_argument('--max_eval_count', type=int, default=2000, help='Maximum number of evaluation batches to process')
 
     args = parser.parse_args()
