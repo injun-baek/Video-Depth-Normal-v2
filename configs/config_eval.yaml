@@ -123,9 +123,9 @@ datasets:
       # mask 영역 없음: 그 외
 
 dataset_common:
-  sequence_length: 50
-  sequence_stride: 50
-  output_size: [518, 518] # H, W  # 384 384
+  sequence_length: 16
+  sequence_stride: 16
+  output_size: [224, 224] # H, W  # 384 384
   use_random_crop: false
   num_workers: 4
   train_val_shuffle: true

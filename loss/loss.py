@@ -1,7 +1,6 @@
-import math
 import torch
 import torch.nn as nn
-import numpy as np
+import torch.nn.functional as F
 
 def reduction_batch_based(image_loss, M):
     # average of all valid pixels of the batch
@@ -367,22 +366,44 @@ class VideoDepthLoss(nn.Module):
         loss_dict['total_loss'] = total
         return loss_dict
 
-    """
+
+class VideoNormalLoss(nn.Module):
+    def __init__(self, trim=0.0, reduction="batch-based"):
+        super().__init__()
+        
+        if reduction == "batch-based":
+            self.__reduction = reduction_batch_based
+        else:
+            self.__reduction = reduction_image_based
+        
+    # TODO: remove code smell: 클래스 밖에서 적용해야 사실상 맞음.
+    def eroded_mask(self, mask):
+        B, T, H, W = mask.shape
+        mask_reshaped = mask.view(B * T, 1, H, W)
+        inverted_mask = ~mask_reshaped.bool()
+        kernel = torch.ones(3, 3).to(mask_reshaped.device)
+        dilated_inverted_mask = F.conv2d(inverted_mask.float(), kernel.unsqueeze(0).unsqueeze(0), padding=1)
+        eroded_mask = ~(dilated_inverted_mask > 0)
+        return eroded_mask.view(B, T, H, W)
+
+    def calculate_cosine_similarity(self, vector1, vector2, mask):
+        vector1_pixelwise = vector1.permute(0, 1, 3, 4, 2).reshape(-1, 3)
+        vector2_pixelwise = vector2.permute(0, 1, 3, 4, 2).reshape(-1, 3)
+        pixel_wise_similarity = F.cosine_similarity(vector1_pixelwise, vector2_pixelwise, dim=1)
+        mask_pixelwise = mask.reshape(-1)
+        masked_sim = pixel_wise_similarity[mask_pixelwise]
+        return self.__reduction(masked_sim, mask)
+    
     def forward(self, prediction, target, mask):
         '''
-            prediction: Shape(B, T, H, W)
-            target: Shape(B, T, H, W)
+            prediction: Shape(B, T, 3, H, W)
+            target: Shape(B, T, 3, H, W)
             mask: Shape(B, T, H, W)
         '''
+        
         loss_dict = {}
-        total = 0
-        loss_dict['spatial_loss'] = self.spatial_loss(prediction=prediction.flatten(0, 1), target=target.flatten(0, 1), mask=mask.flatten(0, 1).float())
-        total += loss_dict['spatial_loss']
-        scale, shift = compute_scale_and_shift(prediction.flatten(1,2), target.flatten(1,2), mask.flatten(1,2))
-        prediction = scale.view(-1, 1, 1, 1) * prediction + shift.view(-1, 1, 1, 1)
-        loss_dict['stable_loss'] = self.stable_loss(prediction=prediction, target=target, mask=mask) * self.stable_scale
-        total += loss_dict['stable_loss']
+        eroded_mask = self.eroded_mask(mask)
+        cosine_similarity = self.calculate_cosine_similarity(prediction, target, eroded_mask)
+        loss_dict['normal_loss'] = 1. - cosine_similarity
 
-        loss_dict['total_loss'] = total
         return loss_dict
-    """

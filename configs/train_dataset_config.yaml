@@ -130,9 +130,9 @@ datasets:
       # mask 영역 없음: 그 외
 
 dataset_common:
-  sequence_length: 8  # todo 데이터 마다 설정
-  sequence_stride: 8
-  output_size: [518, 518] # H, W  # 384 384
+  sequence_length: 16  # todo 데이터 마다 설정
+  sequence_stride: 16
+  output_size: [224, 224] # H, W  # 384 384
   use_random_crop: true
   num_workers: 16
   train_val_shuffle: true

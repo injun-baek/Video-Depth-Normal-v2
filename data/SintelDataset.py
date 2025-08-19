@@ -192,8 +192,10 @@ class SintelDataset(Dataset):
                 new_w = math.ceil(w * scale)
                 pre_resize_size = (new_h, new_w) 
 
-        if self.use_random_crop:
+        if pre_resize_size is not None:
             first_image = F.resize(first_image, pre_resize_size, interpolation=Image.Resampling.BILINEAR)
+        
+        if self.use_random_crop:
             crop_params = transforms.RandomCrop.get_params(first_image, self.output_size)
 
         data = {}
@@ -219,7 +221,7 @@ class SintelDataset(Dataset):
             img = Image.open(frame_path).convert('RGB')
             img_tensor = F.to_tensor(img)
             current_size = [img_tensor.shape[-2], img_tensor.shape[-1]]
-            if resize_size != current_size:
+            if resize_size and resize_size != current_size:
                 img_tensor = F.resize(img_tensor, resize_size, interpolation=Image.Resampling.BILINEAR)
             if self.use_random_crop and crop_params:
                 img_tensor = F.crop(img_tensor, *crop_params)
@@ -245,7 +247,7 @@ class SintelDataset(Dataset):
         img_tensor = torch.from_numpy(img_np).unsqueeze(0)
         
         current_size = [img_tensor.shape[-2], img_tensor.shape[-1]]
-        if resize_size != current_size:
+        if resize_size and resize_size != current_size:
             img_tensor = F.resize(img_tensor, resize_size, interpolation=Image.Resampling.BILINEAR)
         if self.use_random_crop and crop_params:
             img_tensor = F.crop(img_tensor, *crop_params)
