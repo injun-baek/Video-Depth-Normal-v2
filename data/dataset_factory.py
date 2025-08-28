@@ -5,7 +5,9 @@ import yaml
 from typing import Dict, Any
 
 try:
+    from data.BonnDataset import BonnDataset
     from data.DA2KDataset import DA2KDataset
+    from data.NYUv2Dataset import NYUv2Dataset
     from data.SintelDataset import SintelDataset
     from data.VKittiDataset import VKittiDataset
     from data.TartanAirDataset import TartanAirDataset
@@ -14,11 +16,13 @@ try:
 
     # Create a registry to map class names from the config to the actual classes
     DATASET_REGISTRY = {
+        "BonnDataset": BonnDataset,
+        "DA2KDataset": DA2KDataset,
+        "NYUv2Dataset" : NYUv2Dataset,
         "SintelDataset": SintelDataset,
         "VKittiDataset": VKittiDataset,
         "TartanAirDataset": TartanAirDataset,
         "PointOdysseyDataset": PointOdysseyDataset,
-        "DA2KDataset": DA2KDataset,
         # "ScanNetPPDataset": ScanNetPPDataset,
     }
 except ImportError as e:
@@ -45,9 +49,11 @@ def create_datasets(dataset_names, config_file_path, split='train', random_seed=
     datasets = []
     config = load_config(config_file_path)
     common_params = config['dataset_common']
-    
-    valid_dataset_keys = {'sequence_length', 'output_size', 'use_random_crop', 'sequence_stride'}
+
+    valid_dataset_keys = {'sequence_length', 'output_size', 'use_random_crop', 'sequence_stride'}  # input param으로 받기
     filtered_common_params = {k: v for k, v in common_params.items() if k in valid_dataset_keys}
+    if split == 'val':
+        filtered_common_params['use_random_crop'] = False
 
     for dataset_name in dataset_names:
         dataset_config = config['datasets'][dataset_name]

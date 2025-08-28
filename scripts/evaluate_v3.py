@@ -16,7 +16,7 @@ from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 # This allows us to import modules from sibling directories like 'data', 'loss', etc.
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from models.video_depth_model_v2 import VideoDepthAnything
+from models.video_depth_model_v3 import VideoDepthAnything
 from models.video_depth_model import VideoDepthEstimationModel
 
 
@@ -141,7 +141,9 @@ def evaluate(args):
         **model_configs[args.encoder],
         use_residual=args.use_residual
     )
-    model.load_state_dict(torch.load(args.checkpoint, map_location='cpu'))
+    
+    state_dict = torch.load(args.checkpoint, map_location='cpu')
+    model.load_state_dict(state_dict)
     model = model.to(device).eval()
 
     dataset_names = [args.eval_data]
@@ -156,6 +158,7 @@ def evaluate(args):
     
     metric_vals = []
     S = None
+    total_frame_len = 0
     for batch_idx, batch in enumerate(tqdm(val_loader)):
         if batch_idx >= max_batch_limit:
             break
@@ -173,29 +176,31 @@ def evaluate(args):
         gt_depths = gt_depths.squeeze(2)
 
         infer_start_time = time.time()
-        #pred_depths, pred_normals = model(input_depths, rgbs)
-        pred_depths = model(input_depths)
+        if args.model_name == 'dav2':
+            pred_depths = input_depths.squeeze(2)
+        else:
+            pred_depths = model(input_depths)
         infer_elapsed_time += time.time() - infer_start_time
 
-        B, S = gt_depths.shape[0], gt_depths.shape[1]
+
+        B, S = gt_depths.shape[0], gt_depths.shape[1]  # B S H W
+        total_frame_len += S
         for b in range(B):
             metric = eval_single_by_data(
                 pred_depths[b].cpu().numpy(),
-                input_depths[b].squeeze(1).cpu().numpy(),
+                #input_depths[b].squeeze(1).cpu().numpy(),
                 gt_depths[b].squeeze(1).cpu().numpy(),
                 device=args.device,
                 seq_len=S,
                 domain="disp",
                 dataset_min_depth=1e-3,
-                #dataset_min_depth=1e-5, # bonn
                 dataset_max_depth=70,
                 mask=masks[b].squeeze(1).cpu().numpy()
             )
             metric_vals.append(metric)
 
     elapsed_time = time.time() - epoch_start_time
-    inferred_batch_len = min(max_batch_limit, len(val_loader))
-    total_frame_len = inferred_batch_len * B * S
+    print(f"length {S}")
     
     names_to_print = {
         "abs_difference": "L1",
@@ -220,8 +225,9 @@ def evaluate(args):
     
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Validate Video Depth Estimation Model')
-    parser.add_argument('--device', type=str, default='cuda:6', help='Device to use for validation (e.g., cuda:0, cpu).')
+    parser.add_argument('--device', type=str, default='cuda:4', help='Device to use for validation (e.g., cuda:0, cpu).')
     parser.add_argument('--encoder', type=str, default='vits', help='Encoder architecture to use.')
+    parser.add_argument('--model_name', type=str, default='ours', choices=['dav2', 'ours'], help='Model name to use.')
     
     parser.add_argument('--use_residual', type=bool, default=True, help='Use residual connections.')
     parser.add_argument('--input_normal', type=bool, default=True, help='Use input normal.')
@@ -229,13 +235,14 @@ if __name__ == '__main__':
     parser.add_argument('--use_depth_feature', type=bool, default=True, help='Use depth features.')
     parser.add_argument('--use_rgb_feature', type=bool, default=True, help='Use RGB features.')
     
-    parser.add_argument('--checkpoint', type=str, default='trained_models/E135_video_depth_normal_epoch_7.pth', help='Path to validation checkpoint file')
+    parser.add_argument('--checkpoint', type=str, default='trained_models/E166_video_depth_normal_epoch_17.pth', help='Path to validation checkpoint file')
     parser.add_argument('--config', type=str, default='configs/config_eval.yaml', help='Path to validation configuration file')
     parser.add_argument('--num_workers', type=int, default=4, help='Number of workers for data loading')
     parser.add_argument('--batch_size', type=int, default=1, help='Batch size for data loading')
     parser.add_argument('--input_size', type=int, default=224, help='Input size for the model')  # todo sync with config
-    parser.add_argument('--eval_data', type=str, default='Bonn', choices=['NYUv2', 'Sintel', 'Bonn', 'VKitti', 'PointOdyssey', 'TartanAir'], help='Evaluation dataset to use')
+    parser.add_argument('--eval_data', type=str, default='Sintel', choices=['Sintel', 'NYUv2', 'Bonn', 'VKitti', 'PointOdyssey', 'TartanAir'], help='Evaluation dataset to use')
     parser.add_argument('--max_eval_count', type=int, default=2000, help='Maximum number of evaluation batches to process')
+    
 
     args = parser.parse_args()
     INPUT_SIZE = args.input_size

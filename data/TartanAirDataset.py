@@ -219,6 +219,8 @@ class TartanAirDataset(Dataset):
         
         if self.use_random_crop and crop_params:
             img_tensor = F.crop(img_tensor, *crop_params)
+        else:
+            img_tensor = F.center_crop(img_tensor, self.output_size)
         
         current_size = [img_tensor.shape[-2], img_tensor.shape[-1]]
         if current_size != list(self.output_size):

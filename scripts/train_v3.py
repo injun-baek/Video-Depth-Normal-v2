@@ -15,7 +15,7 @@ from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from video_depth_anything.video_depth import VideoDepthAnything
-from models.video_depth_model_v2 import VideoDepthAnything as TrainingModel
+from models.video_depth_model_v3 import VideoDepthAnything as TrainingModel
 from models.video_depth_model import VideoDepthEstimationModel
 from loss.loss import VideoDepthLoss, VideoNormalLoss, compute_scale_and_shift
 from utils.normal_utils import normal_vector
@@ -196,6 +196,18 @@ def create_sample_visualization(
         cmaps.append(depth_visual_cmap)
         subplot_rows += 1
         figsize_height += 2
+        
+        scale, shift = compute_scale_and_shift(pred_depth.unsqueeze(0).flatten(1, 2), depth_anything_depth.unsqueeze(0).flatten(1, 2), torch.ones_like(depth_anything_depth).unsqueeze(0).flatten(1, 2))
+        pred_affine_da_depth = scale.view(1, 1, 1, 1) * depth_anything_depth + shift.view(1, 1, 1, 1)
+        affine_da_error = torch.abs(pred_affine_da_depth - gt_depth)
+        
+        row_titles.append('Residual from DA')
+        data_rows.append(pred_affine_da_depth)
+        cmaps.append(depth_visual_cmap)
+        subplot_rows += 1
+        figsize_height += 2
+        
+        
 
     if video_depth_anything_depth is not None:
         vda_scale, vda_shift = compute_scale_and_shift(video_depth_anything_depth.unsqueeze(0).flatten(1, 2), gt_depth.unsqueeze(0).flatten(1, 2), torch.ones_like(gt_depth).unsqueeze(0).flatten(1, 2))
@@ -206,7 +218,7 @@ def create_sample_visualization(
         data_rows.append(video_depth_anything_depth)
         cmaps.append(depth_visual_cmap)
         subplot_rows += 1
-        figsize_height += 2
+        figsize_height += 2        
 
     fig, axes = plt.subplots(subplot_rows, S, figsize=(2 * S, figsize_height))
 
@@ -371,26 +383,24 @@ def train(args):
         input_normal=args.input_normal
     )
     if args.from_pretrained:
-        model.load_state_dict(torch.load(args.from_pretrained, map_location='cpu'), strict=False)
+        model.load_state_dict(torch.load(args.from_pretrained, map_location='cpu'), strict=True)
     else:        
         model.load_state_dict(torch.load(f'./checkpoints/video_depth_anything_{args.encoder}.pth', map_location='cpu'), strict=False)
     model = model.to(device)
     
-    for param in model.parameters():
+    for param in model.head.parameters():
         param.requires_grad = False
-    for param in model.pretrained.parameters():
-        param.requires_grad = True
-    for param in model.final_res.parameters():
-        param.requires_grad = True
+    # for param in model.parameters():
+    #     param.requires_grad = False
+    # for param in model.pretrained.parameters():
+    #     param.requires_grad = True
+    # for param in model.final_res2.parameters():
+    #     param.requires_grad = True
 
     # if parallel:
     #     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
     #     model = torch.nn.DataParallel(model, device_ids=cuda_nums)
     
-    # todo
-    #if args.pretrained:
-    #    model.load_state_dict(torch.load(args.pretrained, map_location=device))
-
     using_datasets = []
     if args.datasets.lower() == 'small':
         using_datasets = ["Sintel"]
@@ -437,6 +447,8 @@ def train(args):
     normal_criterion = VideoNormalLoss().to(device)
 
     print("Starting training...")
+    
+    val_avg_losses = validate(model, val_loader, depth_criterion, normal_criterion, device)
     for epoch in range(args.epochs):
         model.train()
         running_loss = 0.0
@@ -513,13 +525,13 @@ def train(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Video Depth Anything Training')
 
-    parser.add_argument('--device', type=str, default='cuda:4', help='Device to use for training (e.g., cuda:0, cpu).')
+    parser.add_argument('--device', type=str, default='cuda:7', help='Device to use for training (e.g., cuda:0, cpu).')
     parser.add_argument('--encoder', type=str, default='vits', help='Encoder architecture to use.')
     parser.add_argument('--freeze_encoder', type=bool, default=False, help='Freeze the encoder weights during training.')
     
     parser.add_argument('--use_residual', type=bool, default=True, help='Use residual connections.')
     parser.add_argument('--input_normal', type=bool, default=True, help='Use input normal.')
-    parser.add_argument('--from_pretrained', type=str, default='./trained_models/E135_video_depth_normal_epoch_9.pth', help='from pretrained model')  # None
+    parser.add_argument('--from_pretrained', type=str, default="./trained_models/E166_video_depth_normal_epoch_17.pth", help='from pretrained model')  # './trained_models/E134_video_depth_normal_epoch_9.pth'
     
     parser.add_argument('--datasets', type=str, default='large', choices=['small', 'middle', 'middle2', 'large'], help='Dataset to use for training.')
     parser.add_argument('--sequence_length', type=int, default=16, help='Length of the input video sequence.')
@@ -530,7 +542,7 @@ if __name__ == '__main__':
     parser.add_argument('--initial_lr', type=float, default=1e-5, help='Initial learning rate.')
     parser.add_argument('--final_lr', type=float, default=1e-8, help='Final learning rate.')
     parser.add_argument('--alpha', type=float, default=0.0, help='Alpha value for the gradient loss function.')
-    parser.add_argument('--stable_scale', type=float, default=0.0, help='Scale for the temporal loss function.')
+    parser.add_argument('--stable_scale', type=float, default=10.0, help='Scale for the temporal loss function.')
     parser.add_argument('--ssim_loss_scale', type=float, default=0.0, help='Scale for the SSIM loss function.')
     parser.add_argument('--normal_loss_scale', type=float, default=0.0, help='Scale for the normal loss function.')
 

@@ -14,10 +14,8 @@ from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 # This allows us to import modules from sibling directories like 'data', 'loss', etc.
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from video_depth_anything.video_depth import VideoDepthAnything
-from models.video_depth_model_v2 import VideoDepthAnything as TrainingModel
-from models.video_depth_model import VideoDepthEstimationModel
-from loss.loss import VideoDepthLoss, VideoNormalLoss, compute_scale_and_shift
+from models.video_depth_model_v4 import VideoDepthAnything as TrainingModel
+from loss.loss import VideoDepthLoss, compute_scale_and_shift
 from utils.normal_utils import normal_vector
 from utils.wandb_manager import WandbManager
 
@@ -148,15 +146,17 @@ def prepare_tensors_for_visualization(
     return rgb_display, pred_cpu, gt_cpu
 
 import matplotlib.pyplot as plt
+from matplotlib import colors
+
 
 def create_sample_visualization(
     rgb_image: torch.Tensor,
+    input_depth: torch.Tensor,
     pred_depth: torch.Tensor,
     gt_depth: torch.Tensor,
+    residual: torch.Tensor,
     save_path: str,
     sample_idx: int = 0,
-    depth_anything_depth: torch.Tensor = None,
-    video_depth_anything_depth: torch.Tensor = None
 ) -> None:
     """
     Create and save visualization comparing input, output (affine aligned), gt, and affine invariant error.
@@ -170,51 +170,35 @@ def create_sample_visualization(
         depth_anything_depth: Optional depth from DepthAnything for comparison
         video_depth_anything_depth: Optional depth from VideoDepthAnything for comparison
     """
-
-    scale, shift = compute_scale_and_shift(pred_depth.unsqueeze(0).flatten(1, 2), gt_depth.unsqueeze(0).flatten(1, 2), torch.ones_like(gt_depth).unsqueeze(0).flatten(1, 2))
-    pred_depth = scale.view(1, 1, 1, 1) * pred_depth + shift.view(1, 1, 1, 1)
+    pred_scale, pred_shift = compute_scale_and_shift(pred_depth.unsqueeze(0).flatten(1, 2), gt_depth.unsqueeze(0).flatten(1, 2), torch.ones_like(gt_depth).unsqueeze(0).flatten(1, 2))
+    pred_affined_depth = pred_scale.view(1, 1, 1) * pred_depth + pred_shift.view(1, 1, 1)
     affine_error = torch.abs(pred_depth - gt_depth)
+    # affine_error = pred_affined_depth - gt_depth
+
+    input_scale, input_shift = compute_scale_and_shift(input_depth.unsqueeze(0).flatten(1, 2), gt_depth.unsqueeze(0).flatten(1, 2), torch.ones_like(gt_depth).unsqueeze(0).flatten(1, 2))
+    input_affined_depth = input_scale.view(1, 1, 1) * input_depth + input_shift.view(1, 1, 1)
     
-    pred_depth, gt_depth, affine_error = pred_depth.squeeze(), gt_depth.squeeze(), affine_error.squeeze()
+    #cmap = plt.get_cmap('RdBu_r')
+    cmap = plt.get_cmap('coolwarm')
+    norm = colors.CenteredNorm(vcenter=0.0)
 
-    S = rgb_image.shape[0]    
-    subplot_rows = 4
-    figsize_height = 8
-    
-    depth_visual_cmap = "grey"
-    row_titles = ['RGB Image', 'Output (Aligned)', 'Ground Truth', 'Affine Invariant Error']
-    data_rows = [rgb_image, pred_depth, gt_depth, affine_error]
-    cmaps = [None, depth_visual_cmap, depth_visual_cmap, 'hot']
+    depth_visual_cmap = "gray"
+    row_titles = ['RGB Image', 'Input', 'Output', 'Ground Truth', 'Residual', 'Affine Invariant Error']
+    data_rows = [rgb_image, input_affined_depth, pred_affined_depth, gt_depth, residual, affine_error]
+    cmaps = [None, depth_visual_cmap, depth_visual_cmap, depth_visual_cmap, 'rgba', 'hot']
 
-    if depth_anything_depth is not None:
-        da_scale, da_shift = compute_scale_and_shift(depth_anything_depth.unsqueeze(0).flatten(1, 2), gt_depth.unsqueeze(0).flatten(1, 2), torch.ones_like(gt_depth).unsqueeze(0).flatten(1, 2))
-        depth_anything_depth = da_scale.view(1, 1, 1, 1) * depth_anything_depth + da_shift.view(1, 1, 1, 1)
-        depth_anything_depth = depth_anything_depth.squeeze()
-        # affine_error_da = torch.abs(depth_anything_depth - gt_depth)
-        row_titles.append('Depth Anything')
-        data_rows.append(depth_anything_depth)
-        cmaps.append(depth_visual_cmap)
-        subplot_rows += 1
-        figsize_height += 2
-
-    if video_depth_anything_depth is not None:
-        vda_scale, vda_shift = compute_scale_and_shift(video_depth_anything_depth.unsqueeze(0).flatten(1, 2), gt_depth.unsqueeze(0).flatten(1, 2), torch.ones_like(gt_depth).unsqueeze(0).flatten(1, 2))
-        video_depth_anything_depth = vda_scale.view(1, 1, 1, 1) * video_depth_anything_depth + vda_shift.view(1, 1, 1, 1)
-        video_depth_anything_depth = video_depth_anything_depth.squeeze()
-        # affine_error_vda = torch.abs(video_depth_anything_depth - gt_depth)
-        row_titles.append('Video Depth Anything')
-        data_rows.append(video_depth_anything_depth)
-        cmaps.append(depth_visual_cmap)
-        subplot_rows += 1
-        figsize_height += 2
-
+    S = rgb_image.shape[0]
+    subplot_rows = len(row_titles)
+    figsize_height = 2 * subplot_rows
     fig, axes = plt.subplots(subplot_rows, S, figsize=(2 * S, figsize_height))
 
     for row_idx, (title, data, cmap) in enumerate(zip(row_titles, data_rows, cmaps)):
         for frame_idx in range(S):
             ax = axes[row_idx][frame_idx]
             
-            if cmap:
+            if cmap == 'rgba':
+                im = ax.imshow(norm(data[frame_idx]))
+            elif cmap:
                 im = ax.imshow(data[frame_idx], cmap=cmap, vmin=0, vmax=1)
             else: # For RGB image
                 im = ax.imshow(data[frame_idx])
@@ -235,7 +219,7 @@ def create_sample_visualization(
     plt.close()
 
 @torch.no_grad()
-def create_sample_visualizations(model, dataset, device, sample_indices, video_depth_anything=None, save_dir='./visualizations', save_path_format="sample.png"):
+def create_sample_visualizations(model, dataset, device, sample_indices, save_dir='./visualizations', save_path_format="sample.png", input_depth_max = 65535):
     """Create sample visualizations during training"""
 
     os.makedirs(save_dir, exist_ok=True)
@@ -263,23 +247,144 @@ def create_sample_visualizations(model, dataset, device, sample_indices, video_d
 
         gt_depth = 1. / torch.clamp(gt_depth, min=1e-8)
         gt_depth = preprocess_depth_sequences(gt_depth, mask, True)
-        # gt_normals = normal_vector(gt_depth)
         gt_depth = gt_depth.squeeze(2)
 
-        #pred_depth, pred_normal = model(input_depth, rgb_input)
         pred_depth = model(input_depth)
 
-        pred_depth = (pred_depth - pred_depth.min()) / torch.clamp(pred_depth.max() - pred_depth.min(), min=1e-8)
+        residual = pred_depth - input_depth
+        residual = residual.squeeze().cpu()
+        
+        pred_depth = pred_depth / torch.clamp(pred_depth.max(), min=1e-8)
         pred_depth = pred_depth.clamp(0.0, 1.0)
         
-        da_depth = (da_depth - da_depth.min()) / torch.clamp(da_depth.max() - da_depth.min(), min=1e-8)
-        da_depth = da_depth.clamp(0.0, 1.0)
+        da_depth = da_depth / input_depth_max
         da_depth = da_depth.squeeze().cpu()
 
         rgb_viz, pred_vis, gt_vis = prepare_tensors_for_visualization(rgb_viz, pred_depth, gt_depth)
         
         save_cache_path = os.path.join(save_dir, save_path_format.format(sample_idx=sample_idx))
-        create_sample_visualization(rgb_viz, pred_vis, gt_vis, save_cache_path, sample_idx, da_depth, None)
+        create_sample_visualization(rgb_viz, da_depth, pred_vis, gt_vis, residual, save_cache_path, sample_idx)
+        visualization_paths.append(save_cache_path)
+        pbar.set_postfix({"Sample": sample_idx, "Path": save_cache_path})
+        torch.cuda.empty_cache()
+
+    return visualization_paths
+
+def create_sample_visualization(
+    rgb_image: torch.Tensor,
+    input_depth: torch.Tensor,
+    pred_depth: torch.Tensor,
+    gt_depth: torch.Tensor,
+    residual: torch.Tensor,
+    save_path: str,
+    sample_idx: int = 0,
+) -> None:
+    """
+    Create and save visualization comparing input, output (affine aligned), gt, and affine invariant error.
+    
+    Args:
+        rgb_image: RGB image sequence (S, H, W, C)
+        output_depth: Output depth sequence (S, H, W)
+        gt_depth: Ground truth depth sequence (S, H, W)
+        save_path: Path to save the visualization
+        sample_idx: Sample index for naming
+        depth_anything_depth: Optional depth from DepthAnything for comparison
+        video_depth_anything_depth: Optional depth from VideoDepthAnything for comparison
+    """
+    pred_scale, pred_shift = compute_scale_and_shift(pred_depth.unsqueeze(0).flatten(1, 2), gt_depth.unsqueeze(0).flatten(1, 2), torch.ones_like(gt_depth).unsqueeze(0).flatten(1, 2))
+    pred_affined_depth = pred_scale.view(1, 1, 1) * pred_depth + pred_shift.view(1, 1, 1)
+    affine_error = torch.abs(pred_depth - gt_depth)
+    # affine_error = pred_affined_depth - gt_depth
+
+    input_scale, input_shift = compute_scale_and_shift(input_depth.unsqueeze(0).flatten(1, 2), gt_depth.unsqueeze(0).flatten(1, 2), torch.ones_like(gt_depth).unsqueeze(0).flatten(1, 2))
+    input_affined_depth = input_scale.view(1, 1, 1) * input_depth + input_shift.view(1, 1, 1)
+    
+    #cmap = plt.get_cmap('RdBu_r')
+    cmap = plt.get_cmap('coolwarm')
+    norm = colors.CenteredNorm(vcenter=0.0)
+
+    depth_visual_cmap = "gray"
+    row_titles = ['RGB Image', 'Input', 'Output', 'Ground Truth', 'Residual', 'Affine Invariant Error']
+    data_rows = [rgb_image, input_affined_depth, pred_affined_depth, gt_depth, residual, affine_error]
+    cmaps = [None, depth_visual_cmap, depth_visual_cmap, depth_visual_cmap, 'rgba', 'hot']
+
+    S = rgb_image.shape[0]
+    subplot_rows = len(row_titles)
+    figsize_height = 2 * subplot_rows
+    fig, axes = plt.subplots(subplot_rows, S, figsize=(2 * S, figsize_height))
+
+    for row_idx, (title, data, cmap) in enumerate(zip(row_titles, data_rows, cmaps)):
+        for frame_idx in range(S):
+            ax = axes[row_idx][frame_idx]
+            
+            if cmap == 'rgba':
+                im = ax.imshow(norm(data[frame_idx]))
+            elif cmap:
+                im = ax.imshow(data[frame_idx], cmap=cmap, vmin=0, vmax=1)
+            else: # For RGB image
+                im = ax.imshow(data[frame_idx])
+
+            if row_idx == 0:
+                ax.set_title(f'Frame {frame_idx}', fontsize=10)
+
+            if frame_idx == 0:
+                 ax.set_ylabel(title, fontsize=10, rotation=90, labelpad=15)
+            
+            ax.set_xticks([])
+            ax.set_yticks([])
+    
+    fig.suptitle(f'Sample {sample_idx} Visualization', fontsize=14, fontweight='bold')
+    
+    plt.tight_layout(rect=[0, 0, 1, 0.96]) # Adjust layout to make room for suptitle
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+@torch.no_grad()
+def create_sample_visualizations(model, dataset, device, sample_indices, save_dir='./visualizations', save_path_format="sample.png", input_depth_max = 65535):
+    """Create sample visualizations during training"""
+
+    os.makedirs(save_dir, exist_ok=True)
+    
+    unwrapped_model = model.module if hasattr(model, 'module') else model
+    unwrapped_model.eval()
+
+    visualization_paths = []
+    pbar = tqdm(sample_indices, desc="Creating Visualizations")
+    for i, sample_idx in enumerate(pbar):
+        if sample_idx >= len(dataset):
+            print(f"Warning: Sample index {sample_idx} exceeds dataset size {len(dataset)}")
+            continue
+
+        batch = dataset[sample_idx]
+        rgb = batch["rgb"].to(device).unsqueeze(0)
+        rgb_input = preprocess_rgb_sequences(rgb)
+        
+        gt_depth = batch["depth"].to(device).unsqueeze(0)
+        da_depth = batch["depth_anything_v2"].to(device).unsqueeze(0)
+    
+        rgb_viz = preprocess_rgb_viz_sequences(rgb)
+        mask = batch["mask"].to(device).unsqueeze(0)
+        input_depth = preprocess_depth_sequences(da_depth, mask, False)
+
+        gt_depth = 1. / torch.clamp(gt_depth, min=1e-8)
+        gt_depth = preprocess_depth_sequences(gt_depth, mask, True)
+        gt_depth = gt_depth.squeeze(2)
+
+        pred_depth = model(input_depth)
+
+        residual = pred_depth - input_depth
+        residual = residual.squeeze().cpu()
+        
+        pred_depth = pred_depth / torch.clamp(pred_depth.max(), min=1e-8)
+        pred_depth = pred_depth.clamp(0.0, 1.0)
+        
+        da_depth = da_depth / input_depth_max
+        da_depth = da_depth.squeeze().cpu()
+
+        rgb_viz, pred_vis, gt_vis = prepare_tensors_for_visualization(rgb_viz, pred_depth, gt_depth)
+        
+        save_cache_path = os.path.join(save_dir, save_path_format.format(sample_idx=sample_idx))
+        create_sample_visualization(rgb_viz, da_depth, pred_vis, gt_vis, residual, save_cache_path, sample_idx)
         visualization_paths.append(save_cache_path)
         pbar.set_postfix({"Sample": sample_idx, "Path": save_cache_path})
         torch.cuda.empty_cache()
@@ -287,7 +392,7 @@ def create_sample_visualizations(model, dataset, device, sample_indices, video_d
     return visualization_paths
 
 @torch.no_grad()
-def validate(model, val_loader, depth_criterion, normal_criterion, device):
+def validate(model, val_loader, depth_criterion, device):
     """
     Perform validation on the model.
     """
@@ -305,16 +410,11 @@ def validate(model, val_loader, depth_criterion, normal_criterion, device):
         input_depths = preprocess_depth_sequences(input_depths, masks, False)
         
         gt_depths = 1. / torch.clamp(gt_depths, min=1e-8)
-        #gt_depths = preprocess_depth_sequences(gt_depths, masks, True)
-        gt_normals = normal_vector(gt_depths) # .unsqueeze(2)
         gt_depths = gt_depths.squeeze(2)
         
-        #pred_depths, pred_normals = model(input_depths, rgbs)
         pred_depths = model(input_depths)
         
         depth_loss_dict = depth_criterion(pred_depths, gt_depths, masks.squeeze(2))
-        # normal_loss_dict = normal_criterion(pred_normals, gt_normals, masks.squeeze(2))
-        #for key, value in (depth_loss_dict | normal_loss_dict).items():
         for key, value in depth_loss_dict.items():
             if torch.is_tensor(value):
                 running_losses[key] += value.item()
@@ -351,7 +451,6 @@ def train(args):
         exp_num = logger.get_experiment_number()
 
     cuda_nums = [int(num) for num in args.device.split(':')[1].split(',')]
-    parallel = len(cuda_nums) > 1
     torch.cuda.set_device(cuda_nums[0])
     device = torch.device("cuda" if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
@@ -361,35 +460,38 @@ def train(args):
         'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]},
     }
 
-    # vda_model = VideoDepthAnything(**model_configs[args.encoder])
-    # vda_model.load_state_dict(torch.load(f'./checkpoints/video_depth_anything_{args.encoder}.pth', map_location='cpu'), strict=True)
-    # vda_model = vda_model.to(device)
-
     model = TrainingModel(
         **model_configs[args.encoder],
         use_residual=args.use_residual,
         input_normal=args.input_normal
     )
-    if args.from_pretrained:
-        model.load_state_dict(torch.load(args.from_pretrained, map_location='cpu'), strict=False)
+    
+    if args.from_pretrained:        
+        pretrained_path = args.from_pretrained
     else:        
-        model.load_state_dict(torch.load(f'./checkpoints/video_depth_anything_{args.encoder}.pth', map_location='cpu'), strict=False)
+        pretrained_path = f'./checkpoints/video_depth_anything_{args.encoder}.pth'
+    state_dict = torch.load(pretrained_path, map_location='cpu')
+
+    rename_map = {
+        "head": "temporal_head",
+        "final_res2": "shift_head",
+        "final_scale2": "scale_head",
+    }
+
+    new_state_dict = {}
+    for k, v in state_dict.items():
+        new_k = k
+        for old, new in rename_map.items():
+            if k.startswith(old):
+                new_k = k.replace(old, new, 1)
+                break
+        new_state_dict[new_k] = v
+
+    model.load_state_dict(new_state_dict, strict=True)
     model = model.to(device)
     
-    for param in model.parameters():
+    for param in model.temporal_head.parameters():
         param.requires_grad = False
-    for param in model.pretrained.parameters():
-        param.requires_grad = True
-    for param in model.final_res.parameters():
-        param.requires_grad = True
-
-    # if parallel:
-    #     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-    #     model = torch.nn.DataParallel(model, device_ids=cuda_nums)
-    
-    # todo
-    #if args.pretrained:
-    #    model.load_state_dict(torch.load(args.pretrained, map_location=device))
 
     using_datasets = []
     if args.datasets.lower() == 'small':
@@ -406,10 +508,10 @@ def train(args):
         val_viz_index = [0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12]
     elif args.datasets.lower() == 'large':
         using_datasets = ["VKitti", "TartanAir", "PointOdyssey"]
-        train_viz_index = [32, 93, 101, 149, 169, 193, 241, 248, 286, 411, 548, 703, 780, 812, 933, 1087, 1100, 1189, 1202, 1225, 1258, 1365, 1370, 1373, 1480, 1504, 1508, 1510, 1554, 1567, 1593, 1634, 1647, 1659, 1710, 1778, 1796, 1827, 1839, 1859, 1915, 1973, 2002, 2045, 2174, 2238, 2373, 2408, 2514, 2516, 2566, 2594, 2630, 2649, 2721, 2754, 2837, 2889, 2905, 2911]
-        val_viz_index = [42, 63, 513, 567, 717, 770, 840, 874, 899, 920, 947, 976, 1002, 1009, 1018, 1073, 1140, 1146, 1201, 1234, 1246, 1281, 1305, 1313, 1348, 1379, 1380, 1395, 1400, 1402, 1446, 1449, 1524, 1526, 1605, 1609, 1629, 1649, 1770, 1904, 1950, 2011, 2079, 2127, 2199, 2222, 2225, 2295, 2320, 2500, 2539, 2594, 2745, 2757, 2814, 2865, 2898, 2913, 2925, 2955]
-    else:
-        raise ValueError(f"Unknown dataset option: {args.datasets}. Choose 'small' or 'large'.")
+        # 8 train_viz_index = [32, 93, 101, 149, 169, 193, 241, 248, 286, 411, 548, 703, 780, 812, 933, 1087, 1100, 1189, 1202, 1225, 1258, 1365, 1370, 1373, 1480, 1504, 1508, 1510, 1554, 1567, 1593, 1634, 1647, 1659, 1710, 1778, 1796, 1827, 1839, 1859, 1915, 1973, 2002, 2045, 2174, 2238, 2373, 2408, 2514, 2516, 2566, 2594, 2630, 2649, 2721, 2754, 2837, 2889, 2905, 2911]
+        train_viz_index = [450, 1021, 1502, 8297, 10004, 10273, 11594, 12902, 13179, 14707, 16009, 16462, 16660, 16882, 16889, 17950, 18261, 19113, 19322, 19866, 20667, 20761, 21351, 22501, 23688, 24162, 24536, 25159, 26203, 26374, 28129, 28243, 28313, 29222, 29265, 31095, 32135, 35844, 36164, 37244, 38491, 40420, 41039, 41435, 43047, 44247, 44752, 45266, 45852, 46831]#, 50181, 51907, 52090, 52766, 54094, 57402, 57674, 58228, 59918, 59978, 60183, 60413, 61558, 62343, 64525, 64686, 65301, 65486, 65951, 66217, 68002, 68094, 68692, 69062, 69724, 71752, 72655, 72766, 73424, 74397, 74401, 75238, 75341, 77879, 78593, 78798, 80068, 80265, 80527, 84277, 84727, 85887, 86384, 87235, 87240, 87356, 88813, 89237, 90079, 90410]
+        # 8 val_viz_index = [42, 63, 513, 567, 717, 770, 840, 874, 899, 920, 947, 976, 1002, 1009, 1018, 1073, 1140, 1146, 1201, 1234, 1246, 1281, 1305, 1313, 1348, 1379, 1380, 1395, 1400, 1402, 1446, 1449, 1524, 1526, 1605, 1609, 1629, 1649, 1770, 1904, 1950, 2011, 2079, 2127, 2199, 2222, 2225, 2295, 2320, 2500, 2539, 2594, 2745, 2757, 2814, 2865, 2898, 2913, 2925, 2955]
+        val_viz_index = [155, 159, 200, 233, 267, 295, 321, 330, 339, 382, 411, 423, 468, 586, 590, 614, 624, 695, 743, 774, 785, 857, 1006, 1016, 1056, 1079, 1106, 1125, 1145, 1173, 1318, 1353, 1399, 1493, 1558, 1597, 1607, 1637, 1645, 1678, 1697, 1720, 1761, 1774, 1903, 1924, 2004, 2083, 2150, 2214, 2246, 2315, 2346, 2348, 2365, 2430, 2441, 2448, 2458, 2660, 2677, 2709, 2740, 2760, 2794, 2874, 2936, 2944, 2958, 2988, 2989, 2990, 3099, 3134, 3200, 3222, 3280, 3337, 3366, 3445, 3600, 3655, 3772, 3782, 3978, 4067, 4080, 4096, 4139, 4170, 4176, 4182, 4240, 4345, 4364, 4385, 4437, 4464, 4552, 5054]
 
     train_datasets = create_datasets(using_datasets, config_file_path="./configs/train_dataset_config.yaml", split='train', random_seed=RANDOM_SEED)
     val_datasets = create_datasets(using_datasets, config_file_path="./configs/train_dataset_config.yaml", split='val', random_seed=RANDOM_SEED)
@@ -434,9 +536,9 @@ def train(args):
     optimizer = optim.AdamW(model.parameters(), lr=args.initial_lr)
     scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=10_000, T_mult=2, eta_min=args.final_lr)
     depth_criterion = VideoDepthLoss(alpha=args.alpha, stable_scale=args.stable_scale, ssim_loss_scale=args.ssim_loss_scale).to(device)
-    normal_criterion = VideoNormalLoss().to(device)
 
     print("Starting training...")
+    
     for epoch in range(args.epochs):
         model.train()
         running_loss = 0.0
@@ -454,21 +556,15 @@ def train(args):
             input_depths = preprocess_depth_sequences(input_depths, masks, False)
             
             gt_depths = 1. / torch.clamp(gt_depths, min=1e-8)
-            #gt_depths = preprocess_depth_sequences(gt_depths, masks, True)
-            gt_normals = normal_vector(gt_depths)  #.unsqueeze(2)
             gt_depths = gt_depths.squeeze(2)
 
             optimizer.zero_grad()
-            #pred_depths, pred_normals = model(input_depths, rgbs)
             pred_depths = model(input_depths)
             depth_loss_dict = depth_criterion(pred_depths, gt_depths, masks.squeeze(2))
             total_loss = depth_loss_dict['total_loss']
-            #normal_loss_dict = normal_criterion(pred_normals, gt_normals, masks.squeeze(2))
-            #total_loss = depth_loss_dict['total_loss'] + normal_loss_dict['normal_loss'] * args.normal_loss_scale
 
             total_loss.backward()
             
-            #for key, value in (depth_loss_dict | normal_loss_dict).items():
             for key, value in depth_loss_dict.items():
                 if torch.is_tensor(value):
                     train_running_loss_dict[key] += value.item()
@@ -483,8 +579,8 @@ def train(args):
 
         num_batches = len(train_loader)
         train_avg_losses = {key: value / num_batches for key, value in train_running_loss_dict.items()}
-        train_vis_paths = create_sample_visualizations(model, train_dataset, device, train_viz_index, None, save_path_format = f"{exp_num}" + "_train_sample_{sample_idx:03d}.png")
-        val_vis_paths = create_sample_visualizations(model, val_dataset, device, val_viz_index, None, save_path_format = f"{exp_num}" + "_val_sample_{sample_idx:03d}.png")
+        train_vis_paths = create_sample_visualizations(model, train_dataset, device, train_viz_index, save_path_format = f"{exp_num}" + "_train_sample_{sample_idx:03d}.png")
+        val_vis_paths = create_sample_visualizations(model, val_dataset, device, val_viz_index, save_path_format = f"{exp_num}" + "_val_sample_{sample_idx:03d}.png")
         
         if logger:
             metrics_to_log = {f"training/{key}": value for key, value in train_avg_losses.items()}
@@ -492,7 +588,7 @@ def train(args):
             logger.add_metrics(metrics_to_log)
 
             if (epoch + 1) % args.val_interval == 0:
-                val_avg_losses = validate(model, val_loader, depth_criterion, normal_criterion, device)
+                val_avg_losses = validate(model, val_loader, depth_criterion, device)
                 metrics_to_log = {f"validation/{key}": value for key, value in val_avg_losses.items()}
                 metrics_to_log["epoch"] = epoch + 1
                 logger.add_metrics(metrics_to_log)
@@ -513,24 +609,25 @@ def train(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Video Depth Anything Training')
 
-    parser.add_argument('--device', type=str, default='cuda:4', help='Device to use for training (e.g., cuda:0, cpu).')
+    parser.add_argument('--device', type=str, default='cuda:6', help='Device to use for training (e.g., cuda:0, cpu).')
     parser.add_argument('--encoder', type=str, default='vits', help='Encoder architecture to use.')
     parser.add_argument('--freeze_encoder', type=bool, default=False, help='Freeze the encoder weights during training.')
     
     parser.add_argument('--use_residual', type=bool, default=True, help='Use residual connections.')
     parser.add_argument('--input_normal', type=bool, default=True, help='Use input normal.')
-    parser.add_argument('--from_pretrained', type=str, default='./trained_models/E135_video_depth_normal_epoch_9.pth', help='from pretrained model')  # None
+    parser.add_argument('--from_pretrained', type=str, default="./trained_models/E203_video_depth_normal_epoch_10.pth", help='from pretrained model')
+    #parser.add_argument('--from_pretrained', type=str, default="./trained_models/E166_video_depth_normal_epoch_17.pth", help='from pretrained model')
     
     parser.add_argument('--datasets', type=str, default='large', choices=['small', 'middle', 'middle2', 'large'], help='Dataset to use for training.')
-    parser.add_argument('--sequence_length', type=int, default=16, help='Length of the input video sequence.')
-    parser.add_argument('--batch_size', type=int, default=16, help='Batch size for training.')
-    parser.add_argument('--size', type=int, default=224, help='Input size for the model.')
+    parser.add_argument('--sequence_length', type=int, default=32, help='Length of the input video sequence.')
+    parser.add_argument('--batch_size', type=int, default=2, help='Batch size for training.')
+    parser.add_argument('--size', type=int, default=518, help='Input size for the model.')
     parser.add_argument('--num_workers', type=int, default=4, help='Number of workers for data loading.')
 
-    parser.add_argument('--initial_lr', type=float, default=1e-5, help='Initial learning rate.')
-    parser.add_argument('--final_lr', type=float, default=1e-8, help='Final learning rate.')
+    parser.add_argument('--initial_lr', type=float, default=1e-6, help='Initial learning rate.')
+    parser.add_argument('--final_lr', type=float, default=1e-9, help='Final learning rate.')
     parser.add_argument('--alpha', type=float, default=0.0, help='Alpha value for the gradient loss function.')
-    parser.add_argument('--stable_scale', type=float, default=0.0, help='Scale for the temporal loss function.')
+    parser.add_argument('--stable_scale', type=float, default=10.0, help='Scale for the temporal loss function.')
     parser.add_argument('--ssim_loss_scale', type=float, default=0.0, help='Scale for the SSIM loss function.')
     parser.add_argument('--normal_loss_scale', type=float, default=0.0, help='Scale for the normal loss function.')
 

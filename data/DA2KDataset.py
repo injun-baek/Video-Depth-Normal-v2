@@ -217,7 +217,6 @@ class DA2KDataset(Dataset):
         if self.use_random_crop and crop_params:
             img_tensor = F.crop(img_tensor, *crop_params)
         else:
-            # Use center crop if not using random crop
             img_tensor = F.center_crop(img_tensor, self.output_size)
             
         # Final resize to ensure output size is exact, handling any minor discrepancies

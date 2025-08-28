@@ -59,7 +59,9 @@ def eval_single_by_data(
     seq_len=98, 
     domain='depth', 
     # method_type="ours",
-    dataset_max_depth=70
+    dataset_min_depth=1e-3,
+    dataset_max_depth=70,
+    mask = None
 ):
     # if method_type=="ours":
     #     pred_disp = pred_disp
@@ -78,10 +80,12 @@ def eval_single_by_data(
 
     # valid mask
     valid_mask = np.logical_and(
-            (gt_disp > 1e-3), 
+            (gt_disp > dataset_min_depth), 
             (gt_disp < dataset_max_depth)
         )
-    pred_disp = np.clip(pred_disp, a_min=1e-3, a_max=None) 
+    if mask is not None:
+        valid_mask = np.logical_and(valid_mask, mask[:seq_len])
+    pred_disp = np.clip(pred_disp, a_min=dataset_min_depth, a_max=None) 
     pred_disp_masked = pred_disp[valid_mask].reshape((-1, 1))
     
     # choose evaluation domain
@@ -104,7 +108,7 @@ def eval_single_by_data(
     
     # align
     aligned_pred = scale * pred_disp + shift
-    aligned_pred = np.clip(aligned_pred, a_min=1e-3, a_max=None) 
+    aligned_pred = np.clip(aligned_pred, a_min=dataset_min_depth, a_max=None) 
 
 
     # align in real disp, calc in disp
@@ -120,7 +124,7 @@ def eval_single_by_data(
 
     # metric evaluation, clip to dataset min max
     pred_depth = np.clip(
-            pred_depth, a_min=1e-3, a_max=dataset_max_depth
+            pred_depth, a_min=dataset_min_depth, a_max=dataset_max_depth
         )
 
     # evaluate metric 

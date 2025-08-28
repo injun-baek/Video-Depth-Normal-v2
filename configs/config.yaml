@@ -196,8 +196,8 @@ datasets:
       exclude_scenes: ['character']  # rgb, depth 시퀀스 불일치
 
 dataset_common:
-  sequence_length: 8
-  sequence_stride: 8
+  sequence_length: 16
+  sequence_stride: 16
   output_size: [224, 224] # H, W  # 384 384
   use_random_crop: false  # not tested
   num_workers: 2
